@@ -1,5 +1,9 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
 import { ParkingSpace, Booking, Notification } from '../types';
+import { parkingService } from '../services/parkingService';
+import { bookingService } from '../services/bookingService';
+import { notificationService } from '../services/notificationService';
+import { useAuth } from './AuthContext';
 
 interface ParkingState {
   spaces: ParkingSpace[];
@@ -13,8 +17,9 @@ interface ParkingContextType extends ParkingState {
   updateSpaceStatus: (spaceId: string, status: ParkingSpace['status']) => void;
   getAvailableSpaces: () => ParkingSpace[];
   getUserBookings: (userId: string) => Booking[];
-  addNotification: (notification: Omit<Notification, 'id'>) => void;
-  markNotificationRead: (notificationId: string) => void;
+  refreshSpaces: () => Promise<void>;
+  refreshBookings: () => Promise<void>;
+  refreshNotifications: () => Promise<void>;
 }
 
 const ParkingContext = createContext<ParkingContextType | undefined>(undefined);
@@ -22,8 +27,10 @@ const ParkingContext = createContext<ParkingContextType | undefined>(undefined);
 type ParkingAction = 
   | { type: 'SET_SPACES'; payload: ParkingSpace[] }
   | { type: 'UPDATE_SPACE'; payload: { id: string; updates: Partial<ParkingSpace> } }
+  | { type: 'SET_BOOKINGS'; payload: Booking[] }
   | { type: 'ADD_BOOKING'; payload: Booking }
   | { type: 'UPDATE_BOOKING'; payload: { id: string; updates: Partial<Booking> } }
+  | { type: 'SET_NOTIFICATIONS'; payload: Notification[] }
   | { type: 'ADD_NOTIFICATION'; payload: Notification }
   | { type: 'UPDATE_NOTIFICATION'; payload: { id: string; updates: Partial<Notification> } }
   | { type: 'SET_LOADING'; payload: boolean };
@@ -41,6 +48,8 @@ const parkingReducer = (state: ParkingState, action: ParkingAction): ParkingStat
             : space
         )
       };
+    case 'SET_BOOKINGS':
+      return { ...state, bookings: action.payload };
     case 'ADD_BOOKING':
       return { ...state, bookings: [...state.bookings, action.payload] };
     case 'UPDATE_BOOKING':
@@ -52,6 +61,8 @@ const parkingReducer = (state: ParkingState, action: ParkingAction): ParkingStat
             : booking
         )
       };
+    case 'SET_NOTIFICATIONS':
+      return { ...state, notifications: action.payload };
     case 'ADD_NOTIFICATION':
       return { ...state, notifications: [action.payload, ...state.notifications] };
     case 'UPDATE_NOTIFICATION':
@@ -70,81 +81,79 @@ const parkingReducer = (state: ParkingState, action: ParkingAction): ParkingStat
   }
 };
 
-// Mock parking spaces
-const mockSpaces: ParkingSpace[] = [
-  // Floor 1, Section A
-  ...Array.from({ length: 20 }, (_, i) => ({
-    id: `A1${i + 1}`,
-    number: `A1-${String(i + 1).padStart(2, '0')}`,
-    floor: 1,
-    section: 'A',
-    type: i < 2 ? 'disabled' : i < 6 ? 'compact' : i < 8 ? 'electric' : 'regular',
-    status: Math.random() > 0.3 ? 'available' : 'occupied',
-    hourlyRate: i < 2 ? 5 : i < 6 ? 8 : i < 8 ? 12 : 10,
-    position: { x: (i % 10) * 80 + 20, y: Math.floor(i / 10) * 100 + 50 }
-  } as ParkingSpace)),
-  // Floor 1, Section B
-  ...Array.from({ length: 20 }, (_, i) => ({
-    id: `B1${i + 1}`,
-    number: `B1-${String(i + 1).padStart(2, '0')}`,
-    floor: 1,
-    section: 'B',
-    type: i < 2 ? 'disabled' : i < 6 ? 'compact' : i < 8 ? 'electric' : 'regular',
-    status: Math.random() > 0.3 ? 'available' : 'occupied',
-    hourlyRate: i < 2 ? 5 : i < 6 ? 8 : i < 8 ? 12 : 10,
-    position: { x: (i % 10) * 80 + 20, y: Math.floor(i / 10) * 100 + 200 }
-  } as ParkingSpace)),
-  // Floor 2, Section A
-  ...Array.from({ length: 20 }, (_, i) => ({
-    id: `A2${i + 1}`,
-    number: `A2-${String(i + 1).padStart(2, '0')}`,
-    floor: 2,
-    section: 'A',
-    type: i < 2 ? 'disabled' : i < 6 ? 'compact' : i < 8 ? 'electric' : 'regular',
-    status: Math.random() > 0.4 ? 'available' : 'occupied',
-    hourlyRate: i < 2 ? 5 : i < 6 ? 8 : i < 8 ? 12 : 10,
-    position: { x: (i % 10) * 80 + 20, y: Math.floor(i / 10) * 100 + 50 }
-  } as ParkingSpace))
-];
-
 export const ParkingProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { isAuthenticated } = useAuth();
   const [state, dispatch] = useReducer(parkingReducer, {
-    spaces: mockSpaces,
+    spaces: [],
     bookings: [],
     notifications: [],
     loading: false
   });
 
+  // Load initial data
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshSpaces();
+      refreshBookings();
+      refreshNotifications();
+    }
+  }, [isAuthenticated]);
+
+  const refreshSpaces = async () => {
+    try {
+      dispatch({ type: 'SET_LOADING', payload: true });
+      const { spaces } = await parkingService.getSpaces();
+      dispatch({ type: 'SET_SPACES', payload: spaces });
+    } catch (error) {
+      console.error('Failed to fetch spaces:', error);
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
+  };
+
+  const refreshBookings = async () => {
+    if (!isAuthenticated) return;
+    
+    try {
+      const { bookings } = await bookingService.getBookings();
+      dispatch({ type: 'SET_BOOKINGS', payload: bookings });
+    } catch (error) {
+      console.error('Failed to fetch bookings:', error);
+    }
+  };
+
+  const refreshNotifications = async () => {
+    if (!isAuthenticated) return;
+    
+    try {
+      const { notifications } = await notificationService.getNotifications();
+      dispatch({ type: 'SET_NOTIFICATIONS', payload: notifications });
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error);
+    }
+  };
+
   const bookSpace = async (spaceId: string, startTime: Date, endTime: Date, vehicleNumber?: string): Promise<string> => {
     dispatch({ type: 'SET_LOADING', payload: true });
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const space = state.spaces.find(s => s.id === spaceId);
-    if (!space) throw new Error('Space not found');
-    
-    const hours = Math.ceil((endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60));
-    const totalAmount = hours * space.hourlyRate;
-    
-    const booking: Booking = {
-      id: Date.now().toString(),
-      userId: 'current-user', // Would come from auth context
-      spaceId,
-      startTime,
-      endTime,
-      totalAmount,
-      status: 'pending',
-      paymentStatus: 'pending',
-      vehicleNumber,
-      qrCode: `QR-${Date.now()}`
-    };
-    
-    dispatch({ type: 'ADD_BOOKING', payload: booking });
-    dispatch({ type: 'UPDATE_SPACE', payload: { id: spaceId, updates: { status: 'reserved' } } });
-    dispatch({ type: 'SET_LOADING', payload: false });
-    
-    return booking.id;
+    try {
+      const { booking } = await bookingService.createBooking({
+        spaceId,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        vehicleNumber
+      });
+      
+      dispatch({ type: 'ADD_BOOKING', payload: booking });
+      dispatch({ type: 'UPDATE_SPACE', payload: { id: spaceId, updates: { status: 'reserved' } } });
+      
+      return booking.id;
+    } catch (error) {
+      console.error('Failed to book space:', error);
+      throw error;
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
   };
 
   const updateSpaceStatus = (spaceId: string, status: ParkingSpace['status']) => {
@@ -159,21 +168,6 @@ export const ParkingProvider: React.FC<{ children: ReactNode }> = ({ children })
     return state.bookings.filter(booking => booking.userId === userId);
   };
 
-  const addNotification = (notification: Omit<Notification, 'id'>) => {
-    const newNotification: Notification = {
-      ...notification,
-      id: Date.now().toString()
-    };
-    dispatch({ type: 'ADD_NOTIFICATION', payload: newNotification });
-  };
-
-  const markNotificationRead = (notificationId: string) => {
-    dispatch({ 
-      type: 'UPDATE_NOTIFICATION', 
-      payload: { id: notificationId, updates: { read: true } } 
-    });
-  };
-
   return (
     <ParkingContext.Provider value={{
       ...state,
@@ -181,8 +175,9 @@ export const ParkingProvider: React.FC<{ children: ReactNode }> = ({ children })
       updateSpaceStatus,
       getAvailableSpaces,
       getUserBookings,
-      addNotification,
-      markNotificationRead
+      refreshSpaces,
+      refreshBookings,
+      refreshNotifications
     }}>
       {children}
     </ParkingContext.Provider>
